@@ -71,7 +71,7 @@ func main() {
 	listenOn := "0.0.0.0"
 	if useIpv6 {
 		network = "udp6"
-		listenOn = "::/0"
+		listenOn = "::"
 	}
 	conn, err := icmp.ListenPacket(network, listenOn)
 	if err != nil {
@@ -103,7 +103,12 @@ func main() {
 		if err != nil {
 			log.Fatalf("ReadFrom err %s", err)
 		}
-		ttl, err := conn.IPv4PacketConn().TTL()
+		var ttl int
+		if useIpv6 {
+			ttl, err = conn.IPv6PacketConn().MulticastHopLimit()
+		} else {
+			ttl, err = conn.IPv4PacketConn().TTL()
+		}
 		// conn.IPv6PacketConn() has no property TTL like ipv4's PacketConn, I'm assuming it's the same?
 		reconstructedSeq := binary.BigEndian.Uint16(replyBytes[6:8])
 		endTimes[reconstructedSeq] = time.Now()

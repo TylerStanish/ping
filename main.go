@@ -7,30 +7,33 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
-const Usage = "Usage: ping [-46] {destination}"
+const Usage = "Usage: ping [-6] {destination}"
 
-// https://stackoverflow.com/a/9449851
 const MaxIcmpEchoIpv4 = 28
 const MaxIcmpEchoIpv6 = 48
 
 var startTimes = make(map[uint16]time.Time)
 var endTimes = make(map[uint16]time.Time)
+var target string
+var useIpv6 bool
 
-const target = "127.0.0.1"
-
-func parseFlags(ipv4, ipv6 *bool) {
-	flag.BoolVar(ipv4, "4", true, "use ipv4")
-	flag.BoolVar(ipv6, "6", false, "use ipv6")
+func parseFlags() {
+	ipv6 := flag.Bool("6", false, "use ipv6")
 	flag.Parse()
+	useIpv6 = *ipv6
 	if flag.NArg() != 1 {
 		log.Fatal(Usage)
 	}
+	target = flag.Args()[0]
 }
 
 func createMessage(seq uint16, icmpType icmp.Type) *icmp.Message {
@@ -53,17 +56,35 @@ func udpAddress(addr string) *net.UDPAddr {
 	}
 }
 
+func handleInterrupt() {
+	channel := make(chan os.Signal, 1)
+	signal.Notify(channel, syscall.SIGINT)
+	<-channel
+	fmt.Println("printing statistics...")
+	os.Exit(0)
+}
+
 func main() {
-	var useIpv4, useIpv6 bool
-	parseFlags(&useIpv4, &useIpv6)
-	conn, err := icmp.ListenPacket("udp4", "0.0.0.0")
+	go handleInterrupt()
+	parseFlags()
+	network := "udp4"
+	listenOn := "0.0.0.0"
+	if useIpv6 {
+		network = "udp6"
+		listenOn = "::/0"
+	}
+	conn, err := icmp.ListenPacket(network, listenOn)
 	if err != nil {
 		log.Fatalf("ListenPacket err %s", err)
 	}
 	defer conn.Close()
 	var seq uint16 = 0
 	for {
-		msg := createMessage(seq, ipv4.ICMPTypeEcho)
+		icmpType := icmp.Type(ipv4.ICMPTypeEcho)
+		if useIpv6 {
+			icmpType = icmp.Type(ipv6.ICMPTypeEchoRequest)
+		}
+		msg := createMessage(seq, icmpType)
 		bytes, err := msg.Marshal(nil)
 		if err != nil {
 			log.Fatalf("Marshal err %s", err)
@@ -73,23 +94,24 @@ func main() {
 			log.Fatalf("WriteTo err %s", err)
 		}
 		startTimes[seq] = time.Now()
-		replyBytes := make([]byte, MaxIcmpEchoIpv4)
+		maxReply := MaxIcmpEchoIpv4
+		if useIpv6 {
+			maxReply = MaxIcmpEchoIpv6
+		}
+		replyBytes := make([]byte, maxReply)
 		nBytes, addr, err := conn.ReadFrom(replyBytes)
 		if err != nil {
 			log.Fatalf("ReadFrom err %s", err)
 		}
 		ttl, err := conn.IPv4PacketConn().TTL()
-		msg, err = icmp.ParseMessage(ipv4.ICMPTypeEcho.Protocol(), replyBytes)
-		if err != nil {
-			log.Fatalf("ParseMessage err %s", err)
-		}
+		// conn.IPv6PacketConn() has no property TTL like ipv4's PacketConn, I'm assuming it's the same?
 		reconstructedSeq := binary.BigEndian.Uint16(replyBytes[6:8])
 		endTimes[reconstructedSeq] = time.Now()
 		timeDiff := endTimes[reconstructedSeq].Sub(startTimes[reconstructedSeq])
 		milliFrac := float64(timeDiff.Microseconds()) / float64(1000)
 		tot := float64(timeDiff.Milliseconds()) + milliFrac
 		fmt.Printf(
-			"%d bytes from %s: icmp_seq=%d ttl=%d time=%.2f ms\n",
+			"%d bytes from %s: icmp_seq=%d ttl=%d time=%.3f ms\n",
 			nBytes,
 			addr,
 			reconstructedSeq,

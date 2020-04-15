@@ -2,8 +2,11 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
+	"net"
 	"os"
+	"time"
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
@@ -16,7 +19,7 @@ const MaxIcmpEcho = 65535
 
 //const targetIP = "127.0.0.1"
 
-func parse_flags(ipv4, ipv6 *bool) {
+func parseFlags(ipv4, ipv6 *bool) {
 	flag.BoolVar(ipv4, "4", true, "use ipv4")
 	flag.BoolVar(ipv6, "6", false, "use ipv6")
 	flag.Parse()
@@ -25,7 +28,7 @@ func parse_flags(ipv4, ipv6 *bool) {
 	}
 }
 
-func create_message(seq int, icmpType icmp.Type) icmp.Message {
+func createMessage(seq int, icmpType icmp.Type) icmp.Message {
 	return icmp.Message{
 		Type: icmpType,
 		Code: 0,
@@ -39,9 +42,27 @@ func create_message(seq int, icmpType icmp.Type) icmp.Message {
 	}
 }
 
+func udpAddress(addr string) *net.UDPAddr {
+	return &net.UDPAddr{
+		IP: net.ParseIP(addr),
+	}
+}
+
+func sendMsg(conn *icmp.PacketConn, msg *icmp.Message, target string) {
+	bytes, err := msg.Marshal(nil)
+	if err != nil {
+		log.Fatalf("Marshal err %s", err)
+	}
+	_, err = conn.WriteTo(bytes, udpAddress(target))
+	if err != nil {
+		log.Fatalf("WriteTo err %s", err)
+	}
+}
+
 func main() {
 	var useIpv4, useIpv6 bool
-	parse_flags(&useIpv4, &useIpv6)
+	target := "8.8.8.8"
+	parseFlags(&useIpv4, &useIpv6)
 	conn, err := icmp.ListenPacket("udp4", "0.0.0.0")
 	if err != nil {
 		log.Fatalf("ListenPacket err %s", err)
@@ -49,7 +70,16 @@ func main() {
 	defer conn.Close()
 	seq := 0
 	for {
-		msg := create_message(seq, ipv4.ICMPTypeEcho)
+		msg := createMessage(seq, ipv4.ICMPTypeEcho)
+		sendMsg(conn, &msg, target)
+		// serialize the icmp message to []byte
+		rb := make([]byte, MaxIcmpEcho)
+		nBytes, addr, err := conn.ReadFrom(rb)
+		if err != nil {
+			log.Fatalf("ReadFrom err %s", err)
+		}
+		fmt.Printf("%d bytes from %s: icmp_seq=%d ttl=TODO time=TODO ms\n", nBytes, addr, seq)
 		seq++
+		time.Sleep(time.Second)
 	}
 }

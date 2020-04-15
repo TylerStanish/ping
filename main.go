@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"log"
@@ -18,7 +19,8 @@ const Usage = "Usage: ping [-46] {destination}"
 const MaxIcmpEchoIpv4 = 28
 const MaxIcmpEchoIpv6 = 48
 
-var times = make(map[int]time.Time)
+var startTimes = make(map[uint16]time.Time)
+var endTimes = make(map[uint16]time.Time)
 
 const target = "127.0.0.1"
 
@@ -31,7 +33,7 @@ func parseFlags(ipv4, ipv6 *bool) {
 	}
 }
 
-func createMessage(seq int, icmpType icmp.Type) *icmp.Message {
+func createMessage(seq uint16, icmpType icmp.Type) *icmp.Message {
 	return &icmp.Message{
 		Type: icmpType,
 		Code: 0,
@@ -39,7 +41,7 @@ func createMessage(seq int, icmpType icmp.Type) *icmp.Message {
 			// we need a unique identifier for this session so the OS can
 			// demux the packet back to this process, perhaps the PID will suffice
 			ID:   os.Getpid(),
-			Seq:  seq,
+			Seq:  int(seq),
 			Data: nil,
 		},
 	}
@@ -59,36 +61,41 @@ func main() {
 		log.Fatalf("ListenPacket err %s", err)
 	}
 	defer conn.Close()
-	seq := 0
+	var seq uint16 = 0
 	for {
 		msg := createMessage(seq, ipv4.ICMPTypeEcho)
-		times[seq] = time.Now()
-		//sendMsg(conn, &msg, target)
 		bytes, err := msg.Marshal(nil)
 		if err != nil {
 			log.Fatalf("Marshal err %s", err)
 		}
 		_, err = conn.WriteTo(bytes, udpAddress(target))
-		times[seq] = time.Now()
 		if err != nil {
 			log.Fatalf("WriteTo err %s", err)
 		}
-		//sendMsg
-		//readReply(conn, seq)
-		rb := make([]byte, MaxIcmpEchoIpv4)
-		nBytes, addr, err := conn.ReadFrom(rb)
+		startTimes[seq] = time.Now()
+		replyBytes := make([]byte, MaxIcmpEchoIpv4)
+		nBytes, addr, err := conn.ReadFrom(replyBytes)
 		if err != nil {
 			log.Fatalf("ReadFrom err %s", err)
 		}
 		ttl, err := conn.IPv4PacketConn().TTL()
-		//msg := parseReply(rb, ipv4.ICMPTypeEcho.Protocol())
-		msg, err = icmp.ParseMessage(ipv4.ICMPTypeEcho.Protocol(), rb)
+		msg, err = icmp.ParseMessage(ipv4.ICMPTypeEcho.Protocol(), replyBytes)
 		if err != nil {
 			log.Fatalf("ParseMessage err %s", err)
 		}
-		//parseReply
-		fmt.Printf("%d bytes from %s: icmp_seq=%d ttl=%d time=TODO ms\n", nBytes, addr, seq, ttl)
-		//readReply
+		reconstructedSeq := binary.BigEndian.Uint16(replyBytes[6:8])
+		endTimes[reconstructedSeq] = time.Now()
+		timeDiff := endTimes[reconstructedSeq].Sub(startTimes[reconstructedSeq])
+		milliFrac := float64(timeDiff.Microseconds()) / float64(1000)
+		tot := float64(timeDiff.Milliseconds()) + milliFrac
+		fmt.Printf(
+			"%d bytes from %s: icmp_seq=%d ttl=%d time=%.2f ms\n",
+			nBytes,
+			addr,
+			reconstructedSeq,
+			ttl,
+			tot,
+		)
 		seq++
 		time.Sleep(time.Second)
 	}

@@ -18,7 +18,7 @@ import (
 	"golang.org/x/net/ipv6"
 )
 
-const Usage = "Usage: ping [-6] [-W timeout] [-s bodysize] {destination}"
+const Usage = "Usage: ping [-6] [-i interval] [-W timeout] [-s bodysize] {destination}"
 
 var bodySize = 56
 var icmpIpv4HeaderSize = 28
@@ -88,34 +88,38 @@ func printStatistics() {
 	// Only packets that are received (have a ReceivedAt) or were dropped
 	// (have dropped = true) are counted
 	sentPacketsMutex.Lock()
+	defer sentPacketsMutex.Unlock()
 	for _, packet := range sentPackets {
-		if packet.Dropped || packet.ReceivedAt != nil {
-			numPackets++
-			timeDiff := timeDiffMillis(*packet.SentAt, *packet.ReceivedAt)
-			rttMin = math.Min(rttMin, timeDiff)
-			rttMax = math.Max(rttMax, timeDiff)
-			rttSum += timeDiff
-			if packet.ReceivedAt != nil {
-				packetsReceived++
+		if packet.ReceivedAt == nil {
+			if packet.Dropped {
+				numPackets++
 			}
+			continue
 		}
+		numPackets++
+		timeDiff := timeDiffMillis(*packet.SentAt, *packet.ReceivedAt)
+		rttMin = math.Min(rttMin, timeDiff)
+		rttMax = math.Max(rttMax, timeDiff)
+		rttSum += timeDiff
+		packetsReceived++
 	}
 	rttAvg := rttSum / float64(numPackets)
 	var rttTotalDev float64
 	// looping again for standard deviation
 	for _, packet := range sentPackets {
+		if packet.ReceivedAt == nil {
+			continue
+		}
 		timeDiff := timeDiffMillis(*packet.SentAt, *packet.ReceivedAt)
 		rttTotalDev += math.Pow(timeDiff-rttAvg, 2)
 	}
-	sentPacketsMutex.Unlock()
 	rttStdDev := math.Sqrt(rttTotalDev / float64(numPackets))
 	fmt.Printf("--- %s ping statistics ---\n", target)
 	fmt.Printf(
-		"%d packets transmitted, %d received, +%d errors, %.2f%% packet loss, time %dms\n",
+		"%d packets transmitted, %d received, %.2f%% packet loss, time %dms\n",
 		numPackets,
 		packetsReceived,
-		0,
-		float64(numPackets-packetsReceived)/float64(numPackets),
+		float64(numPackets-packetsReceived)/float64(numPackets)*100,
 		realRuntime,
 	)
 	fmt.Printf(
@@ -165,7 +169,6 @@ func readConn(conn *icmp.PacketConn) {
 		sentPacketsMutex.Lock()
 		now := time.Now()
 		packet := sentPackets[reconstructedSeq]
-		sentPacketsMutex.Unlock()
 		packet.ReceivedAt = &now
 		rtt := timeDiffMillis(*packet.SentAt, *packet.ReceivedAt)
 		fmt.Printf(
@@ -176,6 +179,7 @@ func readConn(conn *icmp.PacketConn) {
 			ttl,
 			rtt,
 		)
+		sentPacketsMutex.Unlock()
 	}
 }
 

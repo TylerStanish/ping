@@ -27,7 +27,6 @@ type PingPacket struct {
 	SentAt     *time.Time
 	ReceivedAt *time.Time
 	Dropped    bool
-	Received   bool
 }
 
 var sentPackets []*PingPacket
@@ -73,15 +72,22 @@ func printStatistics() {
 	real_runtime := uint32(timeDiffMillis(startedAt, time.Now()))
 	var rttMin, rttSum, rttMax float64
 	rttMin = math.MaxFloat64
-	var packetsReceived int
-	numPackets := len(sentPackets)
+	var numPackets, packetsReceived int
+	//numPackets := len(sentPackets)
+	// Some packets may have been sent just as we were ctrl-c'ing,
+	// so we disregard those in the total packet count.
+	// Only packets that are received (have a ReceivedAt) or were dropped
+	// (have dropped = true) are counted
 	for _, packet := range sentPackets {
-		timeDiff := timeDiffMillis(*packet.SentAt, *packet.ReceivedAt)
-		rttMin = math.Min(rttMin, timeDiff)
-		rttMax = math.Max(rttMax, timeDiff)
-		rttSum += timeDiff
-		if packet.ReceivedAt != nil {
-			packetsReceived++
+		if packet.Dropped || packet.ReceivedAt != nil {
+			numPackets++
+			timeDiff := timeDiffMillis(*packet.SentAt, *packet.ReceivedAt)
+			rttMin = math.Min(rttMin, timeDiff)
+			rttMax = math.Max(rttMax, timeDiff)
+			rttSum += timeDiff
+			if packet.ReceivedAt != nil {
+				packetsReceived++
+			}
 		}
 	}
 	rttAvg := rttSum / float64(numPackets)
@@ -98,14 +104,14 @@ func printStatistics() {
 		len(sentPackets),
 		packetsReceived,
 		0,
-		0.04,
+		float64(numPackets-packetsReceived)/float64(numPackets),
 		real_runtime,
 	)
 	fmt.Printf(
 		"rtt min/avg/max/mdev = %.3f/%.3f/%.3f/%.3f ms\n",
 		rttMin,
-		rttMax,
 		rttAvg,
+		rttMax,
 		rttStdDev,
 	)
 }
@@ -148,8 +154,9 @@ func readConn(conn *icmp.PacketConn) {
 		reconstructedSeq := binary.BigEndian.Uint16(replyBytes[6:8])
 		endTimes[reconstructedSeq] = time.Now()
 		now := time.Now()
-		sentPackets[reconstructedSeq].ReceivedAt = &now
-		rtt := timeDiffMillis(startTimes[reconstructedSeq], endTimes[reconstructedSeq])
+		packet := sentPackets[reconstructedSeq]
+		packet.ReceivedAt = &now
+		rtt := timeDiffMillis(*packet.SentAt, *packet.ReceivedAt)
 		fmt.Printf(
 			"%d bytes from %s: icmp_seq=%d ttl=%d time=%.3f ms\n",
 			nBytes,

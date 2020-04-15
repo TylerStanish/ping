@@ -21,10 +21,20 @@ const Usage = "Usage: ping [-6] {destination}"
 const MaxIcmpEchoIpv4 = 28
 const MaxIcmpEchoIpv6 = 48
 
+type PingPacket struct {
+	Seq        uint16
+	SentAt     time.Time
+	ReceivedAt time.Time
+	Dropped    bool
+}
+
+var sentPackets []*PingPacket
+
 var startTimes = make(map[uint16]time.Time)
 var endTimes = make(map[uint16]time.Time)
 var target string
 var useIpv6 bool
+var timeout float64 = 3000
 
 func parseFlags() {
 	ipv6 := flag.Bool("6", false, "use ipv6")
@@ -64,36 +74,16 @@ func handleInterrupt() {
 	os.Exit(0)
 }
 
-func main() {
-	go handleInterrupt()
-	parseFlags()
-	network := "udp4"
-	listenOn := "0.0.0.0"
-	if useIpv6 {
-		network = "udp6"
-		listenOn = "::"
-	}
-	conn, err := icmp.ListenPacket(network, listenOn)
-	if err != nil {
-		log.Fatalf("ListenPacket err %s", err)
-	}
-	defer conn.Close()
-	var seq uint16 = 0
+func timeDiffMillis(start, end time.Time) float64 {
+	timeDiff := end.Sub(start)
+	milliFrac := float64(timeDiff.Microseconds()) / float64(1000)
+	tot := float64(timeDiff.Milliseconds()) + milliFrac
+	return tot
+}
+
+// TODO make this thread safe?
+func readConn(conn *icmp.PacketConn) {
 	for {
-		icmpType := icmp.Type(ipv4.ICMPTypeEcho)
-		if useIpv6 {
-			icmpType = icmp.Type(ipv6.ICMPTypeEchoRequest)
-		}
-		msg := createMessage(seq, icmpType)
-		bytes, err := msg.Marshal(nil)
-		if err != nil {
-			log.Fatalf("Marshal err %s", err)
-		}
-		_, err = conn.WriteTo(bytes, udpAddress(target))
-		if err != nil {
-			log.Fatalf("WriteTo err %s", err)
-		}
-		startTimes[seq] = time.Now()
 		maxReply := MaxIcmpEchoIpv4
 		if useIpv6 {
 			maxReply = MaxIcmpEchoIpv6
@@ -109,20 +99,70 @@ func main() {
 		} else {
 			ttl, err = conn.IPv4PacketConn().TTL()
 		}
-		// conn.IPv6PacketConn() has no property TTL like ipv4's PacketConn, I'm assuming it's the same?
+		// bytes 6-7 of the raw response (the icmp header) are the seq
 		reconstructedSeq := binary.BigEndian.Uint16(replyBytes[6:8])
 		endTimes[reconstructedSeq] = time.Now()
-		timeDiff := endTimes[reconstructedSeq].Sub(startTimes[reconstructedSeq])
-		milliFrac := float64(timeDiff.Microseconds()) / float64(1000)
-		tot := float64(timeDiff.Milliseconds()) + milliFrac
+		rtt := timeDiffMillis(startTimes[reconstructedSeq], endTimes[reconstructedSeq])
 		fmt.Printf(
 			"%d bytes from %s: icmp_seq=%d ttl=%d time=%.3f ms\n",
 			nBytes,
 			addr,
 			reconstructedSeq,
 			ttl,
-			tot,
+			rtt,
 		)
+	}
+}
+
+// after x seconds we declare a packet to be dropped
+func checkDropped() {
+	for _, packet := range sentPackets {
+		if (packet.ReceivedAt == time.Time{}) && (timeDiffMillis(packet.SentAt, time.Now()) > timeout) && !packet.Dropped {
+			packet.Dropped = true
+			fmt.Printf(
+				"icmp_seq=%d Destination Host Unreachable\n",
+				packet.Seq,
+			)
+		}
+	}
+}
+
+func main() {
+	go handleInterrupt()
+	parseFlags()
+	network := "udp4"
+	listenOn := "0.0.0.0"
+	if useIpv6 {
+		network = "udp6"
+		listenOn = "::"
+	}
+	conn, err := icmp.ListenPacket(network, listenOn)
+	if err != nil {
+		log.Fatalf("ListenPacket err %s", err)
+	}
+	defer conn.Close()
+	var seq uint16 = 0
+	go readConn(conn)
+	for {
+		checkDropped()
+		icmpType := icmp.Type(ipv4.ICMPTypeEcho)
+		if useIpv6 {
+			icmpType = icmp.Type(ipv6.ICMPTypeEchoRequest)
+		}
+		msg := createMessage(seq, icmpType)
+		bytes, err := msg.Marshal(nil)
+		if err != nil {
+			log.Fatalf("Marshal err %s", err)
+		}
+		_, err = conn.WriteTo(bytes, udpAddress(target))
+		if err != nil {
+			log.Fatalf("WriteTo err %s", err)
+		}
+		startTimes[seq] = time.Now()
+		sentPackets = append(sentPackets, &PingPacket{
+			Seq:    seq,
+			SentAt: time.Now(),
+		})
 		seq++
 		time.Sleep(time.Second)
 	}

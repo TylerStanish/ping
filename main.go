@@ -21,8 +21,7 @@ import (
 const Usage = "Usage: ping [-6] [-i interval] [-W timeout] [-s bodysize] {destination}"
 
 var bodySize = 56
-var icmpIpv4HeaderSize = 28
-var icmpIpv6HeaderSize = 48
+var icmpHeaderSize = 8
 var maxIcmpEchoIpv4 int
 var maxIcmpEchoIpv6 int
 var interval int
@@ -49,8 +48,8 @@ func parseFlags() {
 	flag.IntVar(&interval, "i", 1, "interval")
 	flag.Parse()
 	useIpv6 = *ipv6
-	maxIcmpEchoIpv4 = icmpIpv4HeaderSize + bodySize
-	maxIcmpEchoIpv6 = icmpIpv6HeaderSize + bodySize
+	maxIcmpEchoIpv4 = icmpHeaderSize + bodySize
+	maxIcmpEchoIpv6 = icmpHeaderSize + bodySize
 	if flag.NArg() != 1 {
 		fmt.Println(Usage)
 		os.Exit(1)
@@ -211,11 +210,7 @@ func getIP() string {
 func main() {
 	startedAt = time.Now()
 	parseFlags()
-	var headerSize = icmpIpv4HeaderSize
-	if useIpv6 {
-		headerSize = icmpIpv6HeaderSize
-	}
-	fmt.Printf("PING %s (%s) %d(%d) bytes of data\n", target, getIP(), bodySize, bodySize+headerSize)
+	fmt.Printf("PING %s (%s) %d(%d) bytes of data\n", target, getIP(), bodySize, bodySize+icmpHeaderSize)
 	go handleInterrupt()
 	network := "udp4"
 	listenOn := "0.0.0.0"

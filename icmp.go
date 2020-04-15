@@ -8,15 +8,13 @@ import (
 	"time"
 
 	"golang.org/x/net/icmp"
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 func readConn(conn *icmp.PacketConn) {
 	for {
-		maxReply := maxIcmpEchoIpv4
-		if useIpv6 {
-			maxReply = maxIcmpEchoIpv6
-		}
-		replyBytes := make([]byte, maxReply)
+		replyBytes := make([]byte, bodySize+icmpHeaderSize)
 		nBytes, _, err := conn.ReadFrom(replyBytes)
 		if err != nil {
 			log.Fatalf("ReadFrom err %s", err)
@@ -71,4 +69,25 @@ func createMessage(seq uint16, icmpType icmp.Type) *icmp.Message {
 			Data: make([]byte, bodySize),
 		},
 	}
+}
+
+func sendICMP(conn *icmp.PacketConn, seq uint16) {
+	icmpType := icmp.Type(ipv4.ICMPTypeEcho)
+	if useIpv6 {
+		icmpType = icmp.Type(ipv6.ICMPTypeEchoRequest)
+	}
+	msg := createMessage(seq, icmpType)
+	bytes, err := msg.Marshal(nil)
+	if err != nil {
+		log.Fatalf("Marshal err %s", err)
+	}
+	_, err = conn.WriteTo(bytes, udpAddress(target))
+	if err != nil {
+		log.Fatalf("WriteTo err %s", err)
+	}
+	now := time.Now()
+	sentPackets = append(sentPackets, &PingPacket{
+		Seq:    seq,
+		SentAt: &now,
+	})
 }

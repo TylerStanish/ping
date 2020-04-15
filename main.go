@@ -105,7 +105,7 @@ func main() {
 		}
 		var ttl int
 		if useIpv6 {
-			ttl, err = conn.IPv6PacketConn().MulticastHopLimit()
+			ttl, err = conn.IPv6PacketConn().HopLimit()
 		} else {
 			ttl, err = conn.IPv4PacketConn().TTL()
 		}

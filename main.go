@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"os"
 	"os/signal"
@@ -23,9 +24,10 @@ const MaxIcmpEchoIpv6 = 48
 
 type PingPacket struct {
 	Seq        uint16
-	SentAt     time.Time
-	ReceivedAt time.Time
+	SentAt     *time.Time
+	ReceivedAt *time.Time
 	Dropped    bool
+	Received   bool
 }
 
 var sentPackets []*PingPacket
@@ -35,6 +37,7 @@ var endTimes = make(map[uint16]time.Time)
 var target string
 var useIpv6 bool
 var timeout float64 = 3000
+var startedAt time.Time
 
 func parseFlags() {
 	ipv6 := flag.Bool("6", false, "use ipv6")
@@ -66,11 +69,53 @@ func udpAddress(addr string) *net.UDPAddr {
 	}
 }
 
+func printStatistics() {
+	real_runtime := uint32(timeDiffMillis(startedAt, time.Now()))
+	var rttMin, rttSum, rttMax float64
+	rttMin = math.MaxFloat64
+	var packetsReceived int
+	numPackets := len(sentPackets)
+	for _, packet := range sentPackets {
+		timeDiff := timeDiffMillis(*packet.SentAt, *packet.ReceivedAt)
+		rttMin = math.Min(rttMin, timeDiff)
+		rttMax = math.Max(rttMax, timeDiff)
+		rttSum += timeDiff
+		if packet.ReceivedAt != nil {
+			packetsReceived++
+		}
+	}
+	rttAvg := rttSum / float64(numPackets)
+	var rttTotalDev float64
+	// looping again for standard deviation
+	for _, packet := range sentPackets {
+		timeDiff := timeDiffMillis(*packet.SentAt, *packet.ReceivedAt)
+		rttTotalDev += math.Pow(timeDiff-rttAvg, 2)
+	}
+	rttStdDev := math.Sqrt(rttTotalDev / float64(numPackets))
+	fmt.Printf("--- %s ping statistics ---\n", target)
+	fmt.Printf(
+		"%d packets transmitted, %d received, +%d errors, %.2f%% packet loss, time %dms\n",
+		len(sentPackets),
+		packetsReceived,
+		0,
+		0.04,
+		real_runtime,
+	)
+	fmt.Printf(
+		"rtt min/avg/max/mdev = %.3f/%.3f/%.3f/%.3f ms\n",
+		rttMin,
+		rttMax,
+		rttAvg,
+		rttStdDev,
+	)
+}
+
 func handleInterrupt() {
 	channel := make(chan os.Signal, 1)
 	signal.Notify(channel, syscall.SIGINT)
 	<-channel
-	fmt.Println("printing statistics...")
+	println() // ping seems to print a newline upon interrupt to put statistics starting on its own new line
+	printStatistics()
 	os.Exit(0)
 }
 
@@ -102,6 +147,8 @@ func readConn(conn *icmp.PacketConn) {
 		// bytes 6-7 of the raw response (the icmp header) are the seq
 		reconstructedSeq := binary.BigEndian.Uint16(replyBytes[6:8])
 		endTimes[reconstructedSeq] = time.Now()
+		now := time.Now()
+		sentPackets[reconstructedSeq].ReceivedAt = &now
 		rtt := timeDiffMillis(startTimes[reconstructedSeq], endTimes[reconstructedSeq])
 		fmt.Printf(
 			"%d bytes from %s: icmp_seq=%d ttl=%d time=%.3f ms\n",
@@ -117,7 +164,7 @@ func readConn(conn *icmp.PacketConn) {
 // after x seconds we declare a packet to be dropped
 func checkDropped() {
 	for _, packet := range sentPackets {
-		if (packet.ReceivedAt == time.Time{}) && (timeDiffMillis(packet.SentAt, time.Now()) > timeout) && !packet.Dropped {
+		if (packet.ReceivedAt == nil) && (timeDiffMillis(*packet.SentAt, time.Now()) > timeout) && !packet.Dropped {
 			packet.Dropped = true
 			fmt.Printf(
 				"icmp_seq=%d Destination Host Unreachable\n",
@@ -128,6 +175,7 @@ func checkDropped() {
 }
 
 func main() {
+	startedAt = time.Now()
 	go handleInterrupt()
 	parseFlags()
 	network := "udp4"
@@ -159,9 +207,10 @@ func main() {
 			log.Fatalf("WriteTo err %s", err)
 		}
 		startTimes[seq] = time.Now()
+		now := time.Now()
 		sentPackets = append(sentPackets, &PingPacket{
 			Seq:    seq,
-			SentAt: time.Now(),
+			SentAt: &now,
 		})
 		seq++
 		time.Sleep(time.Second)

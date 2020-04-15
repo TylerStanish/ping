@@ -15,7 +15,8 @@ import (
 const Usage = "Usage: ping [-46] {destination}"
 
 // https://stackoverflow.com/a/9449851
-const MaxIcmpEcho = 65535
+const MaxIcmpEchoIpv4 = 28
+const MaxIcmpEchoIpv6 = 48
 
 //const targetIP = "127.0.0.1"
 
@@ -59,6 +60,25 @@ func sendMsg(conn *icmp.PacketConn, msg *icmp.Message, target string) {
 	}
 }
 
+func parseReply(data []byte, proto int) *icmp.Message {
+	msg, err := icmp.ParseMessage(proto, data)
+	if err != nil {
+		log.Fatalf("ParseMessage err %s", err)
+	}
+	return msg
+}
+
+func readReply(conn *icmp.PacketConn, seq int) {
+	rb := make([]byte, MaxIcmpEchoIpv4)
+	nBytes, addr, err := conn.ReadFrom(rb)
+	if err != nil {
+		log.Fatalf("ReadFrom err %s", err)
+	}
+	ttl, err := conn.IPv4PacketConn().TTL()
+	parseReply(rb, ipv4.ICMPTypeEcho.Protocol())
+	fmt.Printf("%d bytes from %s: icmp_seq=%d ttl=%d time=TODO ms\n", nBytes, addr, seq, ttl)
+}
+
 func main() {
 	var useIpv4, useIpv6 bool
 	target := "8.8.8.8"
@@ -72,13 +92,7 @@ func main() {
 	for {
 		msg := createMessage(seq, ipv4.ICMPTypeEcho)
 		sendMsg(conn, &msg, target)
-		// serialize the icmp message to []byte
-		rb := make([]byte, MaxIcmpEcho)
-		nBytes, addr, err := conn.ReadFrom(rb)
-		if err != nil {
-			log.Fatalf("ReadFrom err %s", err)
-		}
-		fmt.Printf("%d bytes from %s: icmp_seq=%d ttl=TODO time=TODO ms\n", nBytes, addr, seq)
+		readReply(conn, seq)
 		seq++
 		time.Sleep(time.Second)
 	}

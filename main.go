@@ -18,13 +18,14 @@ import (
 	"golang.org/x/net/ipv6"
 )
 
-const Usage = "Usage: ping [-6] {destination}"
+const Usage = "Usage: ping [-6] [-W timeout] [-s bodysize] {destination}"
 
 var bodySize = 56
-var IcmpIpv4HeaderSize = 28
-var IcmpIpv6HeaderSize = 48
-var MaxIcmpEchoIpv4 = IcmpIpv4HeaderSize + bodySize
-var MaxIcmpEchoIpv6 = IcmpIpv6HeaderSize + bodySize
+var icmpIpv4HeaderSize = 28
+var icmpIpv6HeaderSize = 48
+var maxIcmpEchoIpv4 int
+var maxIcmpEchoIpv6 int
+var interval int
 
 type PingPacket struct {
 	Seq        uint16
@@ -43,10 +44,16 @@ var startedAt time.Time
 
 func parseFlags() {
 	ipv6 := flag.Bool("6", false, "use ipv6")
+	flag.Float64Var(&timeout, "W", 3000, "timeout")
+	flag.IntVar(&bodySize, "s", 56, "bodysize")
+	flag.IntVar(&interval, "i", 1, "interval")
 	flag.Parse()
 	useIpv6 = *ipv6
+	maxIcmpEchoIpv4 = icmpIpv4HeaderSize + bodySize
+	maxIcmpEchoIpv6 = icmpIpv6HeaderSize + bodySize
 	if flag.NArg() != 1 {
-		log.Fatal(Usage)
+		fmt.Println(Usage)
+		os.Exit(1)
 	}
 	target = flag.Args()[0]
 }
@@ -72,11 +79,10 @@ func udpAddress(addr string) *net.UDPAddr {
 }
 
 func printStatistics() {
-	real_runtime := uint32(timeDiffMillis(startedAt, time.Now()))
+	realRuntime := uint32(timeDiffMillis(startedAt, time.Now()))
 	var rttMin, rttSum, rttMax float64
 	rttMin = math.MaxFloat64
 	var numPackets, packetsReceived int
-	//numPackets := len(sentPackets)
 	// Some packets may have been sent just as we were ctrl-c'ing,
 	// so we disregard those in the total packet count.
 	// Only packets that are received (have a ReceivedAt) or were dropped
@@ -110,7 +116,7 @@ func printStatistics() {
 		packetsReceived,
 		0,
 		float64(numPackets-packetsReceived)/float64(numPackets),
-		real_runtime,
+		realRuntime,
 	)
 	fmt.Printf(
 		"rtt min/avg/max/mdev = %.3f/%.3f/%.3f/%.3f ms\n",
@@ -139,9 +145,9 @@ func timeDiffMillis(start, end time.Time) float64 {
 
 func readConn(conn *icmp.PacketConn) {
 	for {
-		maxReply := MaxIcmpEchoIpv4
+		maxReply := maxIcmpEchoIpv4
 		if useIpv6 {
-			maxReply = MaxIcmpEchoIpv6
+			maxReply = maxIcmpEchoIpv6
 		}
 		replyBytes := make([]byte, maxReply)
 		nBytes, _, err := conn.ReadFrom(replyBytes)
@@ -163,7 +169,7 @@ func readConn(conn *icmp.PacketConn) {
 		packet.ReceivedAt = &now
 		rtt := timeDiffMillis(*packet.SentAt, *packet.ReceivedAt)
 		fmt.Printf(
-			"%d bytes from %s icmp_seq=%d ttl=%d time=%.3f ms\n",
+			"%d bytes from %s: icmp_seq=%d ttl=%d time=%.3f ms\n",
 			nBytes,
 			target,
 			reconstructedSeq,
@@ -175,8 +181,6 @@ func readConn(conn *icmp.PacketConn) {
 
 // after x seconds we declare a packet to be dropped
 func checkDropped() {
-	sentPacketsMutex.Lock()
-	defer sentPacketsMutex.Unlock()
 	for _, packet := range sentPackets {
 		if (packet.ReceivedAt == nil) && (timeDiffMillis(*packet.SentAt, time.Now()) > timeout) && !packet.Dropped {
 			packet.Dropped = true
@@ -188,20 +192,26 @@ func checkDropped() {
 	}
 }
 
-func main() {
-	startedAt = time.Now()
-	parseFlags()
+func getIP() string {
 	addrs, err := net.LookupIP(target)
 	if err != nil {
 		log.Fatalf("LookupIP err %s", err)
 	}
-	var headerSize = IcmpIpv4HeaderSize
-	targetIp := addrs[0].To16().String()
-	if useIpv6 {
-		headerSize = IcmpIpv6HeaderSize
-		targetIp = addrs[1].To16().String()
+	targetIP := addrs[0].To16().String()
+	if useIpv6 && len(addrs) > 1 {
+		targetIP = addrs[1].To16().String()
 	}
-	fmt.Printf("PING %s (%s) %d(%d) bytes of data\n", target, targetIp, bodySize, bodySize+headerSize)
+	return targetIP
+}
+
+func main() {
+	startedAt = time.Now()
+	parseFlags()
+	var headerSize = icmpIpv4HeaderSize
+	if useIpv6 {
+		headerSize = icmpIpv6HeaderSize
+	}
+	fmt.Printf("PING %s (%s) %d(%d) bytes of data\n", target, getIP(), bodySize, bodySize+headerSize)
 	go handleInterrupt()
 	network := "udp4"
 	listenOn := "0.0.0.0"
@@ -217,6 +227,7 @@ func main() {
 	var seq uint16 = 0
 	go readConn(conn)
 	for {
+		sentPacketsMutex.Lock()
 		checkDropped()
 		icmpType := icmp.Type(ipv4.ICMPTypeEcho)
 		if useIpv6 {
@@ -232,13 +243,12 @@ func main() {
 			log.Fatalf("WriteTo err %s", err)
 		}
 		now := time.Now()
-		sentPacketsMutex.Lock()
 		sentPackets = append(sentPackets, &PingPacket{
 			Seq:    seq,
 			SentAt: &now,
 		})
 		sentPacketsMutex.Unlock()
 		seq++
-		time.Sleep(time.Second)
+		time.Sleep(time.Duration(int(time.Second) * interval))
 	}
 }

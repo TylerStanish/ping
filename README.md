@@ -6,3 +6,5 @@ with the first argument being the interface and the second being the percentage
 chance of any given packet being dropped, e.g. `packet-loss-simulator.sh eth0
 15`. Then you can restore your interface with the `packet-loss-simulator.sh`
 which takes the interface as its first and only argument.
+
+To build, simply run `go build -o ping`

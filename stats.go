@@ -6,6 +6,16 @@ import (
 	"time"
 )
 
+type Statistics struct {
+	NumPackets      int
+	PacketsReceived int
+	RealRuntime     uint32
+	RTTMin          float64
+	RTTAvg          float64
+	RTTMax          float64
+	RTTStdDev       float64
+}
+
 func timeDiffMillis(start, end time.Time) float64 {
 	timeDiff := end.Sub(start)
 	milliFrac := float64(timeDiff.Microseconds()) / float64(1000)
@@ -13,9 +23,7 @@ func timeDiffMillis(start, end time.Time) float64 {
 	return tot
 }
 
-func printStatistics() {
-	sentPacketsMutex.Lock()
-	defer sentPacketsMutex.Unlock()
+func calculateStatistics() *Statistics {
 	realRuntime := uint32(timeDiffMillis(startedAt, time.Now()))
 	var rttMin, rttSum, rttMax float64
 	rttMin = math.MaxFloat64
@@ -49,19 +57,34 @@ func printStatistics() {
 		rttTotalDev += math.Pow(timeDiff-rttAvg, 2)
 	}
 	rttStdDev := math.Sqrt(rttTotalDev / float64(numPackets))
+	return &Statistics{
+		NumPackets:      numPackets,
+		PacketsReceived: packetsReceived,
+		RealRuntime:     realRuntime,
+		RTTMin:          rttMin,
+		RTTAvg:          rttAvg,
+		RTTMax:          rttMax,
+		RTTStdDev:       rttStdDev,
+	}
+}
+
+func printStatistics() {
+	sentPacketsMutex.Lock()
+	defer sentPacketsMutex.Unlock()
+	stats := calculateStatistics()
 	fmt.Printf("--- %s ping statistics ---\n", target)
 	fmt.Printf(
 		"%d packets transmitted, %d received, %.2f%% packet loss, time %dms\n",
-		numPackets,
-		packetsReceived,
-		float64(numPackets-packetsReceived)/float64(numPackets)*100,
-		realRuntime,
+		stats.NumPackets,
+		stats.PacketsReceived,
+		float64(stats.NumPackets-stats.PacketsReceived)/float64(stats.NumPackets)*100,
+		stats.RealRuntime,
 	)
 	fmt.Printf(
 		"rtt min/avg/max/mdev = %.3f/%.3f/%.3f/%.3f ms\n",
-		rttMin,
-		rttAvg,
-		rttMax,
-		rttStdDev,
+		stats.RTTMin,
+		stats.RTTAvg,
+		stats.RTTMax,
+		stats.RTTStdDev,
 	)
 }

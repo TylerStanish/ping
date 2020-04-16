@@ -49,10 +49,6 @@ func checkDropped() {
 	for _, packet := range sentPackets {
 		if (packet.ReceivedAt == nil) && (timeDiffMillis(*packet.SentAt, time.Now()) > timeout) && !packet.Dropped {
 			packet.Dropped = true
-			fmt.Printf(
-				"icmp_seq=%d Destination Host Unreachable\n",
-				packet.Seq,
-			)
 		}
 	}
 }

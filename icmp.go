@@ -58,8 +58,6 @@ func createMessage(seq uint16, icmpType icmp.Type) *icmp.Message {
 		Type: icmpType,
 		Code: 0,
 		Body: &icmp.Echo{
-			// we need a unique identifier for this session so the OS can
-			// demux the packet back to this process, perhaps the PID will suffice
 			ID:   os.Getpid(),
 			Seq:  int(seq),
 			Data: make([]byte, bodySize),
@@ -77,7 +75,7 @@ func sendICMP(conn *icmp.PacketConn, seq uint16) {
 	if err != nil {
 		log.Fatalf("Marshal err %s", err)
 	}
-	_, err = conn.WriteTo(bytes, udpAddress(target))
+	_, err = conn.WriteTo(bytes, udpAddress(getIP()))
 	if err != nil {
 		log.Fatalf("WriteTo err %s", err)
 	}

@@ -57,7 +57,11 @@ func handleInterrupt() {
 }
 
 func printPingHeader() {
-	fmt.Printf("PING %s (%s) %d(%d) bytes of data\n", target, getIP(), bodySize, bodySize+icmpHeaderSize)
+	ipHeaderSize := 20
+	if useIpv6 {
+		ipHeaderSize = 40
+	}
+	fmt.Printf("PING %s (%s) %d(%d) bytes of data\n", target, getIP(), bodySize, bodySize+icmpHeaderSize+ipHeaderSize)
 }
 
 func main() {
@@ -80,7 +84,7 @@ func main() {
 	go readConn(conn)
 	for {
 		sentPacketsMutex.Lock()
-		checkDropped() // check dropped packets that weren't returned after `timeout` milliseconds
+		checkDropped()
 		sendICMP(conn, seq)
 		sentPacketsMutex.Unlock()
 		seq++

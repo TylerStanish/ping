@@ -14,6 +14,8 @@ func timeDiffMillis(start, end time.Time) float64 {
 }
 
 func printStatistics() {
+	sentPacketsMutex.Lock()
+	defer sentPacketsMutex.Unlock()
 	realRuntime := uint32(timeDiffMillis(startedAt, time.Now()))
 	var rttMin, rttSum, rttMax float64
 	rttMin = math.MaxFloat64
@@ -22,8 +24,6 @@ func printStatistics() {
 	// so we disregard those in the total packet count.
 	// Only packets that are received (have a ReceivedAt) or were dropped
 	// (have dropped = true) are counted
-	sentPacketsMutex.Lock()
-	defer sentPacketsMutex.Unlock()
 	for _, packet := range sentPackets {
 		if packet.ReceivedAt == nil {
 			if packet.Dropped {
